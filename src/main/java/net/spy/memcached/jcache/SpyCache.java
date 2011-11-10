@@ -143,7 +143,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	 * {@inheritDoc}
 	 */
 	@Override
-	public V get(K key) {
+	public V get(Object key) {
 		checkStatusStarted();
 		return getInternal(key);
 	}
@@ -169,7 +169,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	 * {@inheritDoc}
 	 */
 	@Override
-	public boolean containsKey(K key) {
+	public boolean containsKey(Object key) {
 		checkStatusStarted();
 		// noinspection SuspiciousMethodCalls
 		return store.containsKey(key);
@@ -292,7 +292,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	 * {@inheritDoc}
 	 */
 	//@Override
-	public boolean remove(K key) {
+	public boolean remove(Object key) {
 		checkStatusStarted();
 		long start = statisticsEnabled() ? System.nanoTime() : 0;
 		boolean result = store.remove(key);
@@ -307,7 +307,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	 * {@inheritDoc}
 	 */
 	//@Override
-	public boolean remove(K key, V oldValue) {
+	public boolean remove(Object key, V oldValue) {
 		checkStatusStarted();
 		long start = statisticsEnabled() ? System.nanoTime() : 0;
 		boolean result = store.remove(key, oldValue);
@@ -322,7 +322,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	 * {@inheritDoc}
 	 */
 	//@Override
-	public V getAndRemove(K key) {
+	public V getAndRemove(Object key) {
 		checkStatusStarted();
 		V result = store.getAndRemove(key);
 		if (statisticsEnabled()) {
@@ -935,7 +935,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 		}
 	}
 
-	private V getInternal(K key) {
+	private V getInternal(Object key) {
 		// noinspection SuspiciousMethodCalls
 		long start = statisticsEnabled() ? System.nanoTime() : 0;
 
@@ -960,7 +960,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 		}
 	}
 
-	private V getFromLoader(K key) {
+	private V getFromLoader(Object key) {
 		Cache.Entry<K, V> entry = cacheLoader.load(key);
 		if (entry != null) {
 			store.put(entry.getKey(), entry.getValue());

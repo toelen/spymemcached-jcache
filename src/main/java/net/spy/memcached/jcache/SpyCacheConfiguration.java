@@ -128,7 +128,7 @@ public final class SpyCacheConfiguration implements CacheConfiguration {
      *
      * @return the {@link javax.cache.CacheLoader} or null if none has been set.
      */
-    @Override
+    //TODO: probably in 0.4 @Override
     public CacheLoader getCacheLoader() {
         return riCache.getCacheLoader();
     }
@@ -138,7 +138,7 @@ public final class SpyCacheConfiguration implements CacheConfiguration {
      *
      * @return
      */
-    @Override
+    //TODO: probably in 0.4 @Override
     public CacheWriter getCacheWriter() {
         return riCache.getCacheWriter();
     }
@@ -275,7 +275,7 @@ public final class SpyCacheConfiguration implements CacheConfiguration {
                 throw new NullPointerException();
             }
             this.timeToLive[type.ordinal()] =
-                    duration.getDurationAmount() == 0 ? Duration.ETERNAL : duration;
+                    duration.getTimeToLive() == 0 ? Duration.ETERNAL : duration;
             return this;
         }
 
@@ -305,4 +305,22 @@ public final class SpyCacheConfiguration implements CacheConfiguration {
                     isolationLevel, transactionMode, timeToLive);
         }
     }
+
+	@Override
+	public void setReadThrough(boolean readThrough) {
+		// TODO Auto-generated method stub
+
+	}
+
+	@Override
+	public void setWriteThrough(boolean writeThrough) {
+		// TODO Auto-generated method stub
+
+	}
+
+	@Override
+	public void setExpiry(ExpiryType type, Duration duration) {
+		// TODO Auto-generated method stub
+
+	}
 }
