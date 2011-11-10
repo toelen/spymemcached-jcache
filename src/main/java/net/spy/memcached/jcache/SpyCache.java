@@ -34,7 +34,13 @@ import javax.cache.transaction.IsolationLevel;
 import javax.cache.transaction.Mode;
 
 import net.spy.memcached.AddrUtil;
+import net.spy.memcached.FailureMode;
+import net.spy.memcached.HashAlgorithm;
+import net.spy.memcached.ConnectionFactoryBuilder.Locator;
+import net.spy.memcached.ConnectionFactoryBuilder.Protocol;
 import net.spy.memcached.MemcachedClient;
+import net.spy.memcached.spring.MemcachedClientFactoryBean;
+import net.spy.memcached.transcoders.Transcoder;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -71,6 +77,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	private final String servers;
 	private volatile SpyCacheStatistics statistics;
 	private MemcachedClient client;
+	private Locator locator;
 
 	/**
 	 * Constructs a cache.
@@ -994,4 +1001,6 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	long getSize() {
 		return store.size();
 	}
+
+
 }

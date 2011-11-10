@@ -41,6 +41,12 @@ import javax.cache.transaction.IsolationLevel;
 import javax.cache.transaction.Mode;
 import javax.transaction.UserTransaction;
 
+import net.spy.memcached.ConnectionFactoryBuilder.Protocol;
+import net.spy.memcached.FailureMode;
+import net.spy.memcached.HashAlgorithm;
+import net.spy.memcached.ConnectionFactoryBuilder.Locator;
+import net.spy.memcached.transcoders.Transcoder;
+
 /**
  */
 public class SpyCacheManager implements CacheManager {
@@ -51,6 +57,12 @@ public class SpyCacheManager implements CacheManager {
 	private ClassLoader classLoader;
 	private volatile Status status;
 	private String servers;
+	private Locator locator;
+	private HashAlgorithm hashAlgorithm;
+	private FailureMode failureMode;
+	private long opTimeout;
+	private Protocol protocol;
+	private Transcoder<?> transcoder;
 
 	/**
 	 * Constructs a new RICacheManager with the specified name.
@@ -274,6 +286,62 @@ public class SpyCacheManager implements CacheManager {
 
 		throw new IllegalArgumentException("Unwapping to " + cls
 				+ " is not a supported by this implementation");
+	}
+
+	public ClassLoader getClassLoader() {
+		return classLoader;
+	}
+
+	public Locator getLocator() {
+		return locator;
+	}
+
+	public void setLocator(Locator locator) {
+		this.locator = locator;
+	}
+
+	public HashAlgorithm getHashAlgorithm() {
+		return hashAlgorithm;
+	}
+
+	public void setHashAlgorithm(HashAlgorithm hashAlgorithm) {
+		this.hashAlgorithm = hashAlgorithm;
+	}
+
+	public FailureMode getFailureMode() {
+		return failureMode;
+	}
+
+	public void setFailureMode(FailureMode failureMode) {
+		this.failureMode = failureMode;
+	}
+
+	public long getOpTimeout() {
+		return opTimeout;
+	}
+
+	public void setOpTimeout(long opTimeout) {
+		this.opTimeout = opTimeout;
+	}
+
+	public Protocol getProtocol() {
+		return protocol;
+	}
+
+	public void setProtocol(Protocol protocol) {
+		this.protocol = protocol;
+	}
+
+	public Transcoder<?> getTranscoder() {
+		return transcoder;
+	}
+
+	public void setTranscoder(Transcoder<?> transcoder) {
+		this.transcoder = transcoder;
+	}
+
+	public String getServers() {
+		return servers;
 	}
 
 	/**
