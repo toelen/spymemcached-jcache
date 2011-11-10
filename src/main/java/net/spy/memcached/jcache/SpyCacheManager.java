@@ -47,8 +47,8 @@ public class SpyCacheManager implements CacheManager {
 	private static final Logger LOGGER = Logger.getLogger("javax.cache");
 	private final HashMap<String, Cache<?, ?>> caches = new HashMap<String, Cache<?, ?>>();
 	private final HashSet<Class<?>> immutableClasses = new HashSet<Class<?>>();
-	private final String name;
-	private final ClassLoader classLoader;
+	private String name;
+	private ClassLoader classLoader;
 	private volatile Status status;
 	private String servers;
 
@@ -63,19 +63,37 @@ public class SpyCacheManager implements CacheManager {
 	 * @throws NullPointerException
 	 *             if classLoader or name is null.
 	 */
-	public SpyCacheManager(String servers, String name, ClassLoader classLoader) {
-		this.servers = servers;
-
+	public SpyCacheManager() {
 		status = Status.UNINITIALISED;
+
+	}
+
+	public void start() {
 		if (classLoader == null) {
 			throw new NullPointerException("No classLoader specified");
 		}
 		if (name == null) {
 			throw new NullPointerException("No name specified");
 		}
-		this.classLoader = classLoader;
-		this.name = name;
+		if (servers == null) {
+			throw new NullPointerException("No servers specified");
+		}
 		status = Status.STARTED;
+	}
+
+	public void setClassLoader(ClassLoader classLoader) {
+		if (classLoader == null) {
+			throw new NullPointerException("No classLoader specified");
+		}
+		this.classLoader = classLoader;
+	}
+
+	public void setServers(String servers) {
+		if (this.servers == null) {
+			this.servers = servers;
+		} else {
+			this.servers = servers;
+		}
 	}
 
 	/**
@@ -87,6 +105,14 @@ public class SpyCacheManager implements CacheManager {
 	@Override
 	public String getName() {
 		return name;
+	}
+
+	public void setName(String name) {
+		if (name == null) {
+			throw new NullPointerException("No name specified");
+		}
+
+		this.name = name;
 	}
 
 	/**

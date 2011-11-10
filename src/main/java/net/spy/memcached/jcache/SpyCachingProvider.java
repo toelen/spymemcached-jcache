@@ -23,50 +23,56 @@ import javax.cache.spi.CachingProvider;
 /**
  */
 public class SpyCachingProvider implements CachingProvider {
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public CacheManager createCacheManager(ClassLoader classLoader, String name) {
-        if (name == null) {
-            throw new NullPointerException("CacheManager name not specified");
-        }
-        String servers = System.getProperty("spymemcachedservers");
-        if(servers == null || servers.trim().length() == 0){
-        	throw new NullPointerException("spymemcachedservers system property not specified");
-        }
-        return new SpyCacheManager(servers,name, classLoader);
-    }
+	/**
+	 * {@inheritDoc}
+	 */
+	@Override
+	public CacheManager createCacheManager(ClassLoader classLoader, String name) {
+		if (name == null) {
+			throw new NullPointerException("CacheManager name not specified");
+		}
+		String servers = System.getProperty("spymemcachedservers");
+		if (servers == null || servers.trim().length() == 0) {
+			throw new NullPointerException(
+					"spymemcachedservers system property not specified");
+		}
+		SpyCacheManager mgr = new SpyCacheManager();
+		mgr.setName(name);
+		mgr.setServers(servers);
+		mgr.setClassLoader(classLoader);
+		mgr.start();
+		return mgr;
+	}
 
-    /**
-     * {@inheritDoc}
-     *
-     * The RI implementation uses the thread's context ClassLoader.
-     */
-    @Override
-    public ClassLoader getDefaultClassLoader() {
-        return Thread.currentThread().getContextClassLoader();
-    }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * The RI implementation uses the thread's context ClassLoader.
+	 */
+	@Override
+	public ClassLoader getDefaultClassLoader() {
+		return Thread.currentThread().getContextClassLoader();
+	}
 
-    /**
-     * {@inheritDoc}
-     *
-     * The RI supports {@link OptionalFeature#ANNOTATIONS} and
-     * {@link OptionalFeature#STORE_BY_REFERENCE}.
-     * It does not support {@link OptionalFeature#TRANSACTIONS}
-     */
-    @Override
-    public boolean isSupported(OptionalFeature optionalFeature) {
-        switch (optionalFeature) {
-            case ANNOTATIONS:
-                return true;
-            case TRANSACTIONS:
-                return false;
-            case STORE_BY_REFERENCE:
-                return true;
-            default:
-                return false;
-        }
-    }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * The RI supports {@link OptionalFeature#ANNOTATIONS} and
+	 * {@link OptionalFeature#STORE_BY_REFERENCE}. It does not support
+	 * {@link OptionalFeature#TRANSACTIONS}
+	 */
+	@Override
+	public boolean isSupported(OptionalFeature optionalFeature) {
+		switch (optionalFeature) {
+		case ANNOTATIONS:
+			return true;
+		case TRANSACTIONS:
+			return false;
+		case STORE_BY_REFERENCE:
+			return true;
+		default:
+			return false;
+		}
+	}
 
 }
