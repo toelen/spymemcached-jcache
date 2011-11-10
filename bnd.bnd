@@ -1,6 +1,3 @@
 Bundle-SymbolicName: com.meucci.callresult
-Import-Package: !org.osgi.service.blueprint*,\
-	!org.osgi.service.component*,\
-	*
 
 Export-Package: net.spy.memcached.jcache
