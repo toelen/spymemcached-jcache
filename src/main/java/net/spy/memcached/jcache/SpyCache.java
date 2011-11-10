@@ -291,7 +291,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	/**
 	 * {@inheritDoc}
 	 */
-	//@Override
+	// @Override
 	public boolean remove(Object key) {
 		checkStatusStarted();
 		long start = statisticsEnabled() ? System.nanoTime() : 0;
@@ -306,7 +306,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	/**
 	 * {@inheritDoc}
 	 */
-	//@Override
+	// @Override
 	public boolean remove(Object key, V oldValue) {
 		checkStatusStarted();
 		long start = statisticsEnabled() ? System.nanoTime() : 0;
@@ -321,7 +321,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	/**
 	 * {@inheritDoc}
 	 */
-	//@Override
+	// @Override
 	public V getAndRemove(Object key) {
 		checkStatusStarted();
 		V result = store.getAndRemove(key);
@@ -483,11 +483,22 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	 */
 	@Override
 	public void stop() {
-		executorService.shutdown();
 		try {
+
+			executorService.shutdown();
 			executorService.awaitTermination(10, TimeUnit.SECONDS);
 		} catch (InterruptedException e) {
 			throw new CacheException(e);
+		}
+
+		try {
+			if (client != null) {
+				client.shutdown();
+			}
+		} catch (Exception e) {
+			throw new CacheException(e);
+		} finally {
+			client = null;
 		}
 		store.removeAll();
 		status = Status.STOPPED;
@@ -496,6 +507,11 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	private void checkStatusStarted() {
 		if (!status.equals(Status.STARTED)) {
 			throw new IllegalStateException("The cache status is not STARTED");
+		}
+
+		if (client == null) {
+			throw new IllegalStateException(
+					"The memcache client is not configured");
 		}
 	}
 
