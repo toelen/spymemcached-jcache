@@ -291,7 +291,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	/**
 	 * {@inheritDoc}
 	 */
-	@Override
+	//@Override
 	public boolean remove(K key) {
 		checkStatusStarted();
 		long start = statisticsEnabled() ? System.nanoTime() : 0;
@@ -306,7 +306,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	/**
 	 * {@inheritDoc}
 	 */
-	@Override
+	//@Override
 	public boolean remove(K key, V oldValue) {
 		checkStatusStarted();
 		long start = statisticsEnabled() ? System.nanoTime() : 0;
@@ -321,7 +321,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	/**
 	 * {@inheritDoc}
 	 */
-	@Override
+	//@Override
 	public V getAndRemove(K key) {
 		checkStatusStarted();
 		V result = store.getAndRemove(key);
