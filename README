@@ -1,0 +1,1 @@
+spymemcached-jcache is a JSR107 JCache provider using spymemcached as memcache client.
