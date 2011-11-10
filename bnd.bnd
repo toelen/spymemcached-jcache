@@ -1,3 +1,2 @@
-Bundle-SymbolicName: com.meucci.callresult
-
+Bundle-SymbolicName: spymemcached-jcache
 Export-Package: net.spy.memcached.jcache
