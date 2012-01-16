@@ -36,7 +36,7 @@ public class SpySimpleCache<K, V> implements SimpleCache<K, V> {
 
 	@Override
 	public void put(K key, V value) {
-		OperationFuture<Boolean> of = client.add(key.toString(), expiry, value);
+		OperationFuture<Boolean> of = client.set(key.toString(), expiry, value);
 		try {
 			of.get();
 		} catch (InterruptedException e) {
