@@ -275,7 +275,7 @@ public final class SpyCacheConfiguration implements CacheConfiguration {
                 throw new NullPointerException();
             }
             this.timeToLive[type.ordinal()] =
-                    duration.getTimeToLive() == 0 ? Duration.ETERNAL : duration;
+                    duration.getDurationAmount() == 0 ? Duration.ETERNAL : duration;
             return this;
         }
 
@@ -305,22 +305,4 @@ public final class SpyCacheConfiguration implements CacheConfiguration {
                     isolationLevel, transactionMode, timeToLive);
         }
     }
-
-	@Override
-	public void setReadThrough(boolean readThrough) {
-		// TODO Auto-generated method stub
-
-	}
-
-	@Override
-	public void setWriteThrough(boolean writeThrough) {
-		// TODO Auto-generated method stub
-
-	}
-
-	@Override
-	public void setExpiry(ExpiryType type, Duration duration) {
-		// TODO Auto-generated method stub
-
-	}
 }

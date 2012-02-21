@@ -17,31 +17,6 @@
 
 package net.spy.memcached.jcache;
 
-import javax.cache.Cache;
-import javax.cache.CacheBuilder;
-import javax.cache.CacheConfiguration;
-import javax.cache.CacheException;
-import javax.cache.CacheLoader;
-import javax.cache.CacheManager;
-import javax.cache.Caching;
-import javax.cache.CacheStatistics;
-import javax.cache.CacheWriter;
-import javax.cache.InvalidConfigurationException;
-import javax.cache.Status;
-import javax.cache.event.CacheEntryListener;
-import javax.cache.event.NotificationScope;
-import javax.cache.transaction.IsolationLevel;
-import javax.cache.transaction.Mode;
-
-import net.spy.memcached.AddrUtil;
-import net.spy.memcached.FailureMode;
-import net.spy.memcached.HashAlgorithm;
-import net.spy.memcached.ConnectionFactoryBuilder.Locator;
-import net.spy.memcached.ConnectionFactoryBuilder.Protocol;
-import net.spy.memcached.MemcachedClient;
-import net.spy.memcached.spring.MemcachedClientFactoryBean;
-import net.spy.memcached.transcoders.Transcoder;
-
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
@@ -58,6 +33,26 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+
+import javax.cache.Cache;
+import javax.cache.CacheBuilder;
+import javax.cache.CacheConfiguration;
+import javax.cache.CacheException;
+import javax.cache.CacheLoader;
+import javax.cache.CacheManager;
+import javax.cache.CacheStatistics;
+import javax.cache.CacheWriter;
+import javax.cache.Caching;
+import javax.cache.InvalidConfigurationException;
+import javax.cache.Status;
+import javax.cache.event.CacheEntryListener;
+import javax.cache.event.NotificationScope;
+import javax.cache.transaction.IsolationLevel;
+import javax.cache.transaction.Mode;
+
+import net.spy.memcached.AddrUtil;
+import net.spy.memcached.ConnectionFactoryBuilder.Locator;
+import net.spy.memcached.MemcachedClient;
 
 /**
  */
@@ -150,7 +145,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	 * {@inheritDoc}
 	 */
 	@Override
-	public V get(Object key) {
+	public V get(K key) {
 		checkStatusStarted();
 		return getInternal(key);
 	}
@@ -313,8 +308,8 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	/**
 	 * {@inheritDoc}
 	 */
-	// @Override
-	public boolean remove(Object key, V oldValue) {
+	@Override
+	public boolean remove(K key, V oldValue) {
 		checkStatusStarted();
 		long start = statisticsEnabled() ? System.nanoTime() : 0;
 		boolean result = store.remove(key, oldValue);
@@ -328,8 +323,8 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	/**
 	 * {@inheritDoc}
 	 */
-	// @Override
-	public V getAndRemove(Object key) {
+	@Override
+	public V getAndRemove(K key) {
 		checkStatusStarted();
 		V result = store.getAndRemove(key);
 		if (statisticsEnabled()) {
@@ -426,15 +421,14 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 		return configuration;
 	}
 
-	/**
-	 * {@inheritDoc}
-	 */
 	@Override
 	public boolean registerCacheEntryListener(
-			CacheEntryListener<K, V> cacheEntryListener,
+			CacheEntryListener<? super K, ? super V> cacheEntryListener,
 			NotificationScope scope, boolean synchronous) {
 		ScopedListener<K, V> scopedListener = new ScopedListener<K, V>(
 				cacheEntryListener, scope, synchronous);
+//		ScopedListener<? super K, ? super V> scopedListener = new ScopedListener<? super K, ? super V>(
+//				cacheEntryListener, scope, synchronous);
 		return cacheEntryListeners.add(scopedListener);
 	}
 
@@ -567,18 +561,18 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	 * @author Greg Luck
 	 */
 	private static final class ScopedListener<K, V> {
-		private final CacheEntryListener<K, V> listener;
+		private final CacheEntryListener<? super K, ? super V> listener;
 		private final NotificationScope scope;
 		private final boolean synchronous;
 
-		private ScopedListener(CacheEntryListener<K, V> listener,
+		private ScopedListener(CacheEntryListener<? super K, ? super V> cacheEntryListener,
 				NotificationScope scope, boolean synchronous) {
-			this.listener = listener;
+			this.listener = cacheEntryListener;
 			this.scope = scope;
 			this.synchronous = synchronous;
 		}
 
-		private CacheEntryListener<K, V> getListener() {
+		private CacheEntryListener<? super K, ? super V> getListener() {
 			return listener;
 		}
 
@@ -958,7 +952,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 		}
 	}
 
-	private V getInternal(Object key) {
+	private V getInternal(K key) {
 		// noinspection SuspiciousMethodCalls
 		long start = statisticsEnabled() ? System.nanoTime() : 0;
 
@@ -983,7 +977,7 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 		}
 	}
 
-	private V getFromLoader(Object key) {
+	private V getFromLoader(K key) {
 		Cache.Entry<K, V> entry = cacheLoader.load(key);
 		if (entry != null) {
 			store.put(entry.getKey(), entry.getValue());
@@ -1001,6 +995,8 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 	long getSize() {
 		return store.size();
 	}
+
+
 
 
 }

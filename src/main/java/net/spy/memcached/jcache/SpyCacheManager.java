@@ -170,26 +170,7 @@ public class SpyCacheManager implements CacheManager {
 		}
 	}
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public <K, V> Set<Cache<K, V>> getCaches() {
-		synchronized (caches) {
-			HashSet<Cache<K, V>> set = new HashSet<Cache<K, V>>();
-			for (Cache<?, ?> cache : caches.values()) {
-				/*
-				 * Can't really verify K/V cast but it is required by the API,
-				 * using a local variable for the cast to allow for a minimal
-				 * scoping of @SuppressWarnings
-				 */
-				@SuppressWarnings("unchecked")
-				final Cache<K, V> castCache = (Cache<K, V>) cache;
-				set.add(castCache);
-			}
-			return Collections.unmodifiableSet(set);
-		}
-	}
+
 
 	private void addCacheInternal(Cache<?, ?> cache) {
 		synchronized (caches) {
@@ -243,12 +224,9 @@ public class SpyCacheManager implements CacheManager {
 	/**
 	 * {@inheritDoc}
 	 */
-	@Override
+	@Deprecated
 	public void addImmutableClass(Class<?> immutableClass) {
-		if (immutableClass == null) {
-			throw new NullPointerException();
-		}
-		immutableClasses.add(immutableClass);
+		registerImmutableClass(immutableClass);
 	}
 
 	/**
@@ -433,6 +411,22 @@ public class SpyCacheManager implements CacheManager {
 				CacheConfiguration.Duration duration) {
 			cacheBuilder.setExpiry(type, duration);
 			return this;
+		}
+	}
+
+	@Override
+	public void registerImmutableClass(Class<?> immutableClass) {
+		if (immutableClass == null) {
+			throw new NullPointerException();
+		}
+		immutableClasses.add(immutableClass);
+
+	}
+
+	@Override
+	public Iterable<Cache<?, ?>> getCaches() {
+		synchronized (caches) {
+			return Collections.unmodifiableCollection(caches.values());
 		}
 	}
 }

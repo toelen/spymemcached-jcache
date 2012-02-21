@@ -4,7 +4,7 @@
 	<groupId>github.com</groupId>
 	<artifactId>spymemcached-jcache</artifactId>
 	<packaging>bundle</packaging>
-	<version>0.4.1</version>
+	<version>0.4.2</version>
 
 	<name>JSR107 Cache implementation for spymemcached</name>
 
@@ -34,7 +34,7 @@
 		<dependency>
 			<groupId>javax.cache</groupId>
 			<artifactId>cache-api</artifactId>
-			<version>0.3</version>
+			<version>0.4</version>
 		</dependency>
 
 		<dependency>

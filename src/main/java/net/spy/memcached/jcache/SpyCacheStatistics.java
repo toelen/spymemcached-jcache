@@ -19,6 +19,8 @@ package net.spy.memcached.jcache;
 
 import javax.cache.Cache;
 import javax.cache.CacheStatistics;
+import javax.cache.Status;
+
 import java.io.Serializable;
 import java.util.Date;
 import java.util.concurrent.atomic.AtomicLong;
@@ -68,8 +70,8 @@ public class SpyCacheStatistics implements CacheStatistics, Serializable {
      * {@inheritDoc}
      */
     @Override
-    public String getStatus() {
-        return cache.getStatus().toString();
+    public Status getStatus() {
+        return cache.getStatus();
     }
 
     /**
@@ -196,8 +198,8 @@ public class SpyCacheStatistics implements CacheStatistics, Serializable {
      * @return the time in milliseconds
      */
     @Override
-    public long getAverageGetMillis() {
-        return (cacheGetTimeTakenNanos.longValue() / getCacheGets()) / NANOSECONDS_IN_A_MILLISECOND;
+    public float getAverageGetMillis() {
+        return (cacheGetTimeTakenNanos.floatValue() / getCacheGets()) / NANOSECONDS_IN_A_MILLISECOND;
     }
 
     /**
@@ -206,8 +208,8 @@ public class SpyCacheStatistics implements CacheStatistics, Serializable {
      * @return the time in milliseconds
      */
     @Override
-    public long getAveragePutMillis() {
-        return (cachePutTimeTakenNanos.longValue() / getCacheGets()) / NANOSECONDS_IN_A_MILLISECOND;
+    public float getAveragePutMillis() {
+        return (cachePutTimeTakenNanos.floatValue() / getCacheGets()) / NANOSECONDS_IN_A_MILLISECOND;
     }
 
     /**
@@ -216,8 +218,8 @@ public class SpyCacheStatistics implements CacheStatistics, Serializable {
      * @return the time in milliseconds
      */
     @Override
-    public long getAverageRemoveMillis() {
-        return (cacheRemoveTimeTakenNanos.longValue() / getCacheGets()) / NANOSECONDS_IN_A_MILLISECOND;
+    public float getAverageRemoveMillis() {
+        return (cacheRemoveTimeTakenNanos.floatValue() / getCacheGets()) / NANOSECONDS_IN_A_MILLISECOND;
     }
 
     //package local incrementers
