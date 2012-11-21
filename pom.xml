@@ -34,9 +34,13 @@
 		<dependency>
 			<groupId>javax.cache</groupId>
 			<artifactId>cache-api</artifactId>
-			<version>0.4</version>
+			<version>0.5</version>
 		</dependency>
-
+		<dependency>
+			<groupId>javax.cache.implementation</groupId>
+			<artifactId>cache-ri-common</artifactId>
+			<version>0.5</version>
+		</dependency>
 		<dependency>
 			<groupId>javax.enterprise</groupId>
 			<artifactId>cdi-api</artifactId>

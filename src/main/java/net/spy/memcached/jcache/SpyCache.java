@@ -27,12 +27,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 import javax.cache.Cache;
 import javax.cache.CacheBuilder;
@@ -45,8 +47,14 @@ import javax.cache.CacheWriter;
 import javax.cache.Caching;
 import javax.cache.InvalidConfigurationException;
 import javax.cache.Status;
+import javax.cache.Cache.Entry;
+import javax.cache.Cache.EntryProcessor;
+import javax.cache.Cache.MutableEntry;
 import javax.cache.event.CacheEntryListener;
-import javax.cache.event.NotificationScope;
+import javax.cache.implementation.AbstractCache;
+import javax.cache.implementation.DelegatingCacheMXBean;
+
+import javax.cache.mbeans.CacheMXBean;
 import javax.cache.transaction.IsolationLevel;
 import javax.cache.transaction.Mode;
 
@@ -56,415 +64,491 @@ import net.spy.memcached.MemcachedClient;
 
 /**
  */
-public final class SpyCache<K, V> implements Cache<K, V> {
+public final class SpyCache<K, V> extends AbstractCache<K, V> {
 	private static final int CACHE_LOADER_THREADS = 2;
-
-	private SimpleCache<K, V> store;
-	private final String cacheName;
-	private final String cacheManagerName;
-	private final CacheConfiguration configuration;
-	private final CacheLoader<K, V> cacheLoader;
-	private final CacheWriter<K, V> cacheWriter;
-	private final Set<ScopedListener<K, V>> cacheEntryListeners = new CopyOnWriteArraySet<ScopedListener<K, V>>();
-	private final ExecutorService executorService = Executors
+    private SpySimpleCache<K, V> store;
+    private final Set<CacheEntryListener<? super K, ? super V>> cacheEntryListeners =
+            new CopyOnWriteArraySet<CacheEntryListener<? super K, ? super V>>();
+    private volatile Status status;
+    private final SpyCacheStatistics statistics;
+    private final CacheMXBean mBean;
+    private final LockManager<K> lockManager = new LockManager<K>();
+    private String servers;
+    private MemcachedClient client;
+    private final ExecutorService executorService = Executors
 			.newFixedThreadPool(CACHE_LOADER_THREADS);
-	private volatile Status status;
-	private final String servers;
-	private volatile SpyCacheStatistics statistics;
-	private MemcachedClient client;
-	private Locator locator;
-
-	/**
-	 * Constructs a cache.
-	 *
-	 * @param cacheName
-	 *            the cache name
-	 * @param classLoader
-	 *            the class loader
-	 * @param cacheManagerName
-	 *            the cache manager name
-	 * @param immutableClasses
-	 *            the set of immutable classes
-	 * @param configuration
-	 *            the configuration
-	 * @param cacheLoader
-	 *            the cache loader
-	 * @param cacheWriter
-	 *            the cache writer
-	 * @param listeners
-	 *            the cache listeners
-	 */
-	private SpyCache(String cacheName, String cacheManagerName,
-			Set<Class<?>> immutableClasses, ClassLoader classLoader,
-			CacheConfiguration configuration, CacheLoader<K, V> cacheLoader,
-			CacheWriter<K, V> cacheWriter,
-			CopyOnWriteArraySet<ListenerRegistration<K, V>> listeners,
-			String servers) {
-		status = Status.UNINITIALISED;
-		assert configuration != null;
-		assert cacheName != null;
-		assert servers != null;
+    /**
+     * Constructs a cache.
+     * 
+     * @param cacheName
+     * @param cacheManagerName
+     * @param classLoader
+     * @param configuration
+     * @param cacheLoader
+     * @param cacheWriter
+     * @param listeners
+     * @param servers
+     */
+    private SpyCache(String cacheName, String cacheManagerName,
+                    ClassLoader classLoader,
+                    CacheConfiguration<K, V> configuration,
+                    CacheLoader<K, ? extends V> cacheLoader, CacheWriter<? super K, ? super V> cacheWriter,
+                    Set<CacheEntryListener<K, V>> listeners,String servers) {
+        super(cacheName, cacheManagerName, classLoader, configuration, cacheLoader, cacheWriter);
+        status = Status.UNINITIALISED;
+        assert servers != null;
 		assert servers.trim().length() > 0;
-		assert cacheManagerName != null;
-		assert immutableClasses != null;
-		this.servers = servers;
-		this.cacheName = cacheName;
-		this.cacheManagerName = cacheManagerName;
-		this.configuration = configuration;
-		this.cacheLoader = cacheLoader;
-		this.cacheWriter = cacheWriter;
-		// store = configuration.isStoreByValue() ? new RIByValueSimpleCache<K,
-		// V>(
-		// new RISerializer<K>(classLoader, immutableClasses),
-		// new RISerializer<V>(classLoader, immutableClasses))
-		// : new RIByReferenceSimpleCache<K, V>();
-		statistics = new SpyCacheStatistics(this, cacheManagerName);
-		for (ListenerRegistration<K, V> listener : listeners) {
-			registerCacheEntryListener(listener.cacheEntryListener,
-					listener.scope, listener.synchronous);
-		}
-	}
+        this.servers = servers;
+        statistics = new SpyCacheStatistics(this);
+        mBean = new DelegatingCacheMXBean<K, V>(this);
+        for (CacheEntryListener<K, V> listener : listeners) {
+            registerCacheEntryListener(listener);
+        }
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public String getName() {
-		return cacheName;
-	}
+    /**
+     * Gets the registered {@link javax.cache.CacheLoader}, if any.
+     *
+     * @return the {@link javax.cache.CacheLoader} or null if none has been set.
+     */
+    @Override
+    public CacheLoader<K, ? extends V> getCacheLoader() {
+        return super.getCacheLoader();
+    }
 
-	/**
-	 * @inheritDoc
-	 */
-	@Override
-	public CacheManager getCacheManager() {
-		return Caching.getCacheManager(cacheManagerName);
-	}
+    /**
+     * Gets the registered {@link javax.cache.CacheWriter}, if any.
+     *
+     * @return
+     */
+    @Override
+    public CacheWriter<? super K, ? super V> getCacheWriter() {
+        return super.getCacheWriter();
+    }
+    
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public V get(K key) {
+        checkStatusStarted();
+        if (key == null) {
+            throw new NullPointerException();
+        }
+        return getInternal(key);
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public V get(K key) {
-		checkStatusStarted();
-		return getInternal(key);
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Map<K, V> getAll(Set<? extends K> keys) {
+        checkStatusStarted();
+        if (keys.contains(null)) {
+            throw new NullPointerException("key");
+        }
+        // will throw NPE if keys=null
+        HashMap<K, V> map = new HashMap<K, V>(keys.size());
+        for (K key : keys) {
+            V value = getInternal(key);
+            if (value != null) {
+                map.put(key, value);
+            }
+        }
+        return map;
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public Map<K, V> getAll(Collection<? extends K> keys) {
-		checkStatusStarted();
-		if (keys.contains(null)) {
-			throw new NullPointerException("key");
-		}
-		// will throw NPE if keys=null
-		HashMap<K, V> map = new HashMap<K, V>(keys.size());
-		for (K key : keys) {
-			map.put(key, getInternal(key));
-		}
-		return map;
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean containsKey(K key) {
+        checkStatusStarted();
+        if (key == null) {
+            throw new NullPointerException();
+        }
+        lockManager.lock(key);
+        try {
+            return store.containsKey(key);
+        } finally {
+            lockManager.unLock(key);
+        }
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public boolean containsKey(Object key) {
-		checkStatusStarted();
-		// noinspection SuspiciousMethodCalls
-		return store.containsKey(key);
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Future<V> load(K key) {
+        checkStatusStarted();
+        if (key == null) {
+            throw new NullPointerException("key");
+        }
+        if (getCacheLoader() == null) {
+            return null;
+        }
+        if (containsKey(key)) {
+            return null;
+        }
+        FutureTask<V> task = new FutureTask<V>(new SpyCacheLoaderLoadCallable<K, V>(this, getCacheLoader(), key));
+        submit(task);
+        return task;
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public Future<V> load(K key) {
-		checkStatusStarted();
-		if (key == null) {
-			throw new NullPointerException("key");
-		}
-		if (cacheLoader == null) {
-			return null;
-		}
-		if (containsKey(key)) {
-			return null;
-		}
-		FutureTask<V> task = new FutureTask<V>(
-				new RICacheLoaderLoadCallable<K, V>(this, cacheLoader, key));
-		executorService.submit(task);
-		return task;
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    public Future<Map<K, ? extends V>> loadAll(Set<? extends K> keys) {
+        checkStatusStarted();
+        if (keys == null) {
+            throw new NullPointerException("keys");
+        }
+        if (getCacheLoader() == null) {
+            return null;
+        }
+        if (keys.contains(null)) {
+            throw new NullPointerException("key");
+        }
+        Callable<Map<K, ? extends V>> callable = new SpyCacheLoaderLoadAllCallable<K, V>(this, getCacheLoader(), keys);
+        FutureTask<Map<K, ? extends V>> task = new FutureTask<Map<K, ? extends V>>(callable);
+        submit(task);
+        return task;
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public Future<Map<K, V>> loadAll(Collection<? extends K> keys) {
-		checkStatusStarted();
-		if (keys == null) {
-			throw new NullPointerException("keys");
-		}
-		if (cacheLoader == null) {
-			return null;
-		}
-		if (keys.contains(null)) {
-			throw new NullPointerException("key");
-		}
-		FutureTask<Map<K, V>> task = new FutureTask<Map<K, V>>(
-				new RICacheLoaderLoadAllCallable<K, V>(this, cacheLoader, keys));
-		executorService.submit(task);
-		return task;
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public CacheStatistics getStatistics() {
+        checkStatusStarted();
+        if (statisticsEnabled()) {
+            return statistics;
+        } else {
+            return null;
+        }
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public CacheStatistics getStatistics() {
-		checkStatusStarted();
-		if (statisticsEnabled()) {
-			return statistics;
-		} else {
-			return null;
-		}
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void put(K key, V value) {
+        checkStatusStarted();
+        long start = statisticsEnabled() ? System.nanoTime() : 0;
+        lockManager.lock(key);
+        try {
+            store.put(key, value);
+        } finally {
+            lockManager.unLock(key);
+        }
+        if (statisticsEnabled()) {
+            statistics.increaseCachePuts(1);
+            statistics.addPutTimeNano(System.nanoTime() - start);
+        }
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public void put(K key, V value) {
-		checkStatusStarted();
-		long start = statisticsEnabled() ? System.nanoTime() : 0;
-		store.put(key, value);
-		if (statisticsEnabled()) {
-			statistics.increaseCachePuts(1);
-			statistics.addPutTimeNano(System.nanoTime() - start);
-		}
-	}
+    @Override
+    public V getAndPut(K key, V value) {
+        checkStatusStarted();
+        long start = statisticsEnabled() ? System.nanoTime() : 0;
+        V result;
+        lockManager.lock(key);
+        try {
+            result = store.getAndPut(key, value);
+        } finally {
+            lockManager.unLock(key);
+        }
+        if (statisticsEnabled()) {
+            statistics.increaseCachePuts(1);
+            statistics.addPutTimeNano(System.nanoTime() - start);
+        }
+        return result;
+    }
 
-	@Override
-	public V getAndPut(K key, V value) {
-		checkStatusStarted();
-		long start = statisticsEnabled() ? System.nanoTime() : 0;
-		V result = store.getAndPut(key, value);
-		if (statisticsEnabled()) {
-			statistics.increaseCachePuts(1);
-			statistics.addPutTimeNano(System.nanoTime() - start);
-		}
-		return result;
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void putAll(Map<? extends K, ? extends V> map) {
+        checkStatusStarted();
+        long start = statisticsEnabled() ? System.nanoTime() : 0;
+        if (map.containsKey(null)) {
+            throw new NullPointerException("key");
+        }
+        //store.putAll(map);
+        for (Map.Entry<? extends K, ? extends V> entry : map.entrySet()) {
+            K key = entry.getKey();
+            lockManager.lock(key);
+            try {
+                store.put(key, entry.getValue());
+            } finally {
+                lockManager.unLock(key);
+            }
+        }
+        if (statisticsEnabled()) {
+            statistics.increaseCachePuts(map.size());
+            statistics.addPutTimeNano(System.nanoTime() - start);
+        }
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public void putAll(Map<? extends K, ? extends V> map) {
-		checkStatusStarted();
-		long start = statisticsEnabled() ? System.nanoTime() : 0;
-		if (map.containsKey(null)) {
-			throw new NullPointerException("key");
-		}
-		store.putAll(map);
-		if (statisticsEnabled()) {
-			statistics.increaseCachePuts(map.size());
-			statistics.addPutTimeNano(System.nanoTime() - start);
-		}
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean putIfAbsent(K key, V value) {
+        checkStatusStarted();
+        long start = statisticsEnabled() ? System.nanoTime() : 0;
+        boolean result;
+        lockManager.lock(key);
+        try {
+            result = store.putIfAbsent(key, value);
+        } finally {
+            lockManager.unLock(key);
+        }
+        if (result && statisticsEnabled()) {
+            statistics.increaseCachePuts(1);
+            statistics.addPutTimeNano(System.nanoTime() - start);
+        }
+        return result;
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public boolean putIfAbsent(K key, V value) {
-		checkStatusStarted();
-		long start = statisticsEnabled() ? System.nanoTime() : 0;
-		boolean result = store.putIfAbsent(key, value);
-		if (result && statisticsEnabled()) {
-			statistics.increaseCachePuts(1);
-			statistics.addPutTimeNano(System.nanoTime() - start);
-		}
-		return result;
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean remove(K key) {
+        checkStatusStarted();
+        long start = statisticsEnabled() ? System.nanoTime() : 0;
+        boolean result;
+        lockManager.lock(key);
+        try {
+            result = store.remove(key);
+        } finally {
+            lockManager.unLock(key);
+        }
+        if (result && statisticsEnabled()) {
+            statistics.increaseCacheRemovals(1);
+            statistics.addRemoveTimeNano(System.nanoTime() - start);
+        }
+        return result;
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	// @Override
-	public boolean remove(Object key) {
-		checkStatusStarted();
-		long start = statisticsEnabled() ? System.nanoTime() : 0;
-		boolean result = store.remove(key);
-		if (result && statisticsEnabled()) {
-			statistics.increaseCacheRemovals(1);
-			statistics.addRemoveTimeNano(System.nanoTime() - start);
-		}
-		return result;
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean remove(K key, V oldValue) {
+        checkStatusStarted();
+        long start = statisticsEnabled() ? System.nanoTime() : 0;
+        boolean result;
+        lockManager.lock(key);
+        try {
+            result = store.remove(key, oldValue);
+        } finally {
+            lockManager.unLock(key);
+        }
+        if (result && statisticsEnabled()) {
+            statistics.increaseCacheRemovals(1);
+            statistics.addRemoveTimeNano(System.nanoTime() - start);
+        }
+        return result;
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public boolean remove(K key, V oldValue) {
-		checkStatusStarted();
-		long start = statisticsEnabled() ? System.nanoTime() : 0;
-		boolean result = store.remove(key, oldValue);
-		if (result && statisticsEnabled()) {
-			statistics.increaseCacheRemovals(1);
-			statistics.addRemoveTimeNano(System.nanoTime() - start);
-		}
-		return result;
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public V getAndRemove(K key) {
+        checkStatusStarted();
+        V result;
+        lockManager.lock(key);
+        try {
+            result = store.getAndRemove(key);
+        } finally {
+            lockManager.unLock(key);
+        }
+        if (statisticsEnabled()) {
+            if (result != null) {
+                statistics.increaseCacheHits(1);
+                statistics.increaseCacheRemovals(1);
+            } else {
+                statistics.increaseCacheMisses(1);
+            }
+        }
+        return result;
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public V getAndRemove(K key) {
-		checkStatusStarted();
-		V result = store.getAndRemove(key);
-		if (statisticsEnabled()) {
-			if (result != null) {
-				statistics.increaseCacheHits(1);
-				statistics.increaseCacheRemovals(1);
-			} else {
-				statistics.increaseCacheMisses(1);
-			}
-		}
-		return result;
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean replace(K key, V oldValue, V newValue) {
+        checkStatusStarted();
+        boolean result;
+        lockManager.lock(key);
+        try {
+            result = store.replace(key, oldValue, newValue);
+        } finally {
+            lockManager.unLock(key);
+        }
+        if (result && statisticsEnabled()) {
+            statistics.increaseCachePuts(1);
+        }
+        return result;
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public boolean replace(K key, V oldValue, V newValue) {
-		checkStatusStarted();
-		if (store.replace(key, oldValue, newValue)) {
-			if (statisticsEnabled()) {
-				statistics.increaseCachePuts(1);
-			}
-			return true;
-		} else {
-			return false;
-		}
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean replace(K key, V value) {
+        checkStatusStarted();
+        boolean result;
+        lockManager.lock(key);
+        try {
+            result = store.replace(key, value);
+        } finally {
+            lockManager.unLock(key);
+        }
+        if (result && statisticsEnabled()) {
+            statistics.increaseCachePuts(1);
+        }
+        return result;
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public boolean replace(K key, V value) {
-		checkStatusStarted();
-		boolean result = store.replace(key, value);
-		if (statisticsEnabled()) {
-			statistics.increaseCachePuts(1);
-		}
-		return result;
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public V getAndReplace(K key, V value) {
+        checkStatusStarted();
+        V result;
+        lockManager.lock(key);
+        try {
+            result = store.getAndReplace(key, value);
+        } finally {
+            lockManager.unLock(key);
+        }
+        if (statisticsEnabled()) {
+            if (result != null) {
+                statistics.increaseCacheHits(1);
+                statistics.increaseCachePuts(1);
+            } else {
+                statistics.increaseCacheMisses(1);
+            }
+        }
+        return result;
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public V getAndReplace(K key, V value) {
-		checkStatusStarted();
-		V result = store.getAndReplace(key, value);
-		if (statisticsEnabled()) {
-			if (result != null) {
-				statistics.increaseCacheHits(1);
-				statistics.increaseCachePuts(1);
-			} else {
-				statistics.increaseCacheMisses(1);
-			}
-		}
-		return result;
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void removeAll(Set<? extends K> keys) {
+        checkStatusStarted();
+        for (K key : keys) {
+            lockManager.lock(key);
+            try {
+                store.remove(key);
+            } finally {
+                lockManager.unLock(key);
+            }
+        }
+        if (statisticsEnabled()) {
+            statistics.increaseCacheRemovals(keys.size());
+        }
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public void removeAll(Collection<? extends K> keys) {
-		checkStatusStarted();
-		for (K key : keys) {
-			store.remove(key);
-		}
-		if (statisticsEnabled()) {
-			statistics.increaseCacheRemovals(keys.size());
-		}
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void removeAll() {
+        checkStatusStarted();
+        int size = (statisticsEnabled()) ? store.size() : 0;
+        //store.removeAll();
+        Iterator<Map.Entry<K, V>> iterator = store.iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<K, V> entry = iterator.next();
+            K key = entry.getKey();
+            lockManager.lock(key);
+            try {
+                iterator.remove();
+            } finally {
+                lockManager.unLock(key);
+            }
+        }
+        //possible race here but it is only stats
+        if (statisticsEnabled()) {
+            statistics.increaseCacheRemovals(size);
+        }
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public void removeAll() {
-		checkStatusStarted();
-		int size = (statisticsEnabled()) ? store.size() : 0;
-		// possible race here but it is only stats
-		store.removeAll();
-		if (statisticsEnabled()) {
-			statistics.increaseCacheRemovals(size);
-		}
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean registerCacheEntryListener(CacheEntryListener<? super K, ? super V> cacheEntryListener) {
+        return cacheEntryListeners.add(cacheEntryListener);
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public CacheConfiguration getConfiguration() {
-		return configuration;
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean unregisterCacheEntryListener(CacheEntryListener<?, ?> cacheEntryListener) {
+        return cacheEntryListeners.remove(cacheEntryListener);
+    }
 
-	@Override
-	public boolean registerCacheEntryListener(
-			CacheEntryListener<? super K, ? super V> cacheEntryListener,
-			NotificationScope scope, boolean synchronous) {
-		ScopedListener<K, V> scopedListener = new ScopedListener<K, V>(
-				cacheEntryListener, scope, synchronous);
-//		ScopedListener<? super K, ? super V> scopedListener = new ScopedListener<? super K, ? super V>(
-//				cacheEntryListener, scope, synchronous);
-		return cacheEntryListeners.add(scopedListener);
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Object invokeEntryProcessor(K key, EntryProcessor<K, V> entryProcessor) {
+        checkStatusStarted();
+        if (key == null) {
+            throw new NullPointerException();
+        }
+        if (key == entryProcessor) {
+            throw new NullPointerException();
+        }
+        Object result = null;
+        lockManager.lock(key);
+        try {
+        	SpyMutableEntry<K, V> entry = new SpyMutableEntry<K, V>(key, store);
+            result = entryProcessor.process(entry);
+            entry.commit();
+        } finally {
+            lockManager.unLock(key);
+        }
+        return result;
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public boolean unregisterCacheEntryListener(
-			CacheEntryListener<?, ?> cacheEntryListener) {
-		/*
-		 * Only listeners that can be added are typed so this cast should be
-		 * safe
-		 */
-		@SuppressWarnings("unchecked")
-		CacheEntryListener<K, V> castCacheEntryListener = (CacheEntryListener<K, V>) cacheEntryListener;
-		// Only cacheEntryListener is checked for equality
-		ScopedListener<K, V> scopedListener = new ScopedListener<K, V>(
-				castCacheEntryListener, null, true);
-		return cacheEntryListeners.remove(scopedListener);
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Iterator<Entry<K, V>> iterator() {
+        checkStatusStarted();
+        return new RIEntryIterator<K, V>(store.iterator(), lockManager);
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public Iterator<Entry<K, V>> iterator() {
-		checkStatusStarted();
-		return new RIEntryIterator<K, V>(store.iterator());
-	}
+    @Override
+    public CacheMXBean getMBean() {
+        return mBean;
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public void start() {
-		List<InetSocketAddress> addresses = AddrUtil.getAddresses(servers);
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void start() {
+    	if(servers == null){
+    		throw new NullPointerException("servers is null");
+    	}
+    	List<InetSocketAddress> addresses = AddrUtil.getAddresses(servers);
 		assert addresses != null;
 		assert addresses.size() > 0;
 
@@ -476,15 +560,17 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 		} catch (IOException e) {
 			throw new RuntimeException(e);
 		}
+    }
 
-	}
-
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public void stop() {
-		try {
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void stop() {
+        super.stop();
+        store.removeAll();
+        
+        try {
 
 			executorService.shutdown();
 			executorService.awaitTermination(10, TimeUnit.SECONDS);
@@ -503,500 +589,425 @@ public final class SpyCache<K, V> implements Cache<K, V> {
 		}
 		store.removeAll();
 		status = Status.STOPPED;
-	}
+    }
 
-	private void checkStatusStarted() {
-		if (!status.equals(Status.STARTED)) {
-			throw new IllegalStateException("The cache status is not STARTED");
-		}
+    private void checkStatusStarted() {
+        if (!status.equals(Status.STARTED)) {
+            throw new IllegalStateException("The cache status is not STARTED");
+        }
+    }
 
-		if (client == null) {
-			throw new IllegalStateException(
-					"The memcache client is not configured");
-		}
-	}
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Status getStatus() {
+        return status;
+    }
 
-	/**
-	 * {@inheritDoc}
-	 */
-	@Override
-	public Status getStatus() {
-		return status;
-	}
+    @Override
+    public <T> T unwrap(java.lang.Class<T> cls) {
+        if (cls.isAssignableFrom(this.getClass())) {
+            return cls.cast(this);
+        }
+        
+        throw new IllegalArgumentException("Unwrapping to " + cls + " is not a supported by this implementation");
+    }
 
-	/**
-	 * @return the cachewriter
-	 */
-	CacheWriter<K, V> getCacheWriter() {
-		return cacheWriter;
-	}
+    private boolean statisticsEnabled() {
+        return getConfiguration().isStatisticsEnabled();
+    }
 
-	/**
-	 * @return the cacheloader
-	 */
-	CacheLoader<K, V> getCacheLoader() {
-		return cacheLoader;
-	}
+    private V getInternal(K key) {
+        long start = statisticsEnabled() ? System.nanoTime() : 0;
 
-	@Override
-	public <T> T unwrap(java.lang.Class<T> cls) {
-		if (cls.isAssignableFrom(this.getClass())) {
-			return cls.cast(this);
-		}
+        V value = null;
+        lockManager.lock(key);
+        try {
+            value = store.get(key);
+        } finally {
+            lockManager.unLock(key);
+        }
+        if (statisticsEnabled()) {
+            statistics.addGetTimeNano(System.nanoTime() - start);
+        }
+        if (value == null) {
+            if (statisticsEnabled()) {
+                statistics.increaseCacheMisses(1);
+            }
+            if (getCacheLoader() != null) {
+                return getFromLoader(key);
+            } else {
+                return null;
+            }
+        } else {
+            if (statisticsEnabled()) {
+                statistics.increaseCacheHits(1);
+            }
+            return value;
+        }
+    }
 
-		throw new IllegalArgumentException("Unwrapping to " + cls
-				+ " is not a supported by this implementation");
-	}
+    private V getFromLoader(K key) {
+        Entry<K, ? extends V> entry = getCacheLoader().load(key);
+        if (entry != null) {
+            store.put(entry.getKey(), entry.getValue());
+            return entry.getValue();
+        } else {
+            return null;
+        }
+    }
 
-	private boolean statisticsEnabled() {
-		return configuration.isStatisticsEnabled();
-	}
+    /**
+     * Returns the size of the cache.
+     *
+     * @return the size in entries of the cache
+     */
+    long getSize() {
+        return store.size();
+    }
 
-	/**
-	 * Combine a Listener and its NotificationScope. Equality and hashcode are
-	 * based purely on the listener. This implies that the same listener cannot
-	 * be added to the set of registered listeners more than once with different
-	 * notification scopes.
-	 *
-	 * @author Greg Luck
-	 */
-	private static final class ScopedListener<K, V> {
-		private final CacheEntryListener<? super K, ? super V> listener;
-		private final NotificationScope scope;
-		private final boolean synchronous;
+    /**
+     * {@inheritDoc}
+     *
+     * @author Yannis Cosmadopoulos
+     */
+    private static class RIEntry<K, V> implements Entry<K, V> {
+        private final K key;
+        private final V value;
 
-		private ScopedListener(CacheEntryListener<? super K, ? super V> cacheEntryListener,
-				NotificationScope scope, boolean synchronous) {
-			this.listener = cacheEntryListener;
-			this.scope = scope;
-			this.synchronous = synchronous;
-		}
+        public RIEntry(K key, V value) {
+            if (key == null) {
+                throw new NullPointerException("key");
+            }
+            this.key = key;
+            this.value = value;
+        }
 
-		private CacheEntryListener<? super K, ? super V> getListener() {
-			return listener;
-		}
+        @Override
+        public K getKey() {
+            return key;
+        }
 
-		private NotificationScope getScope() {
-			return scope;
-		}
+        @Override
+        public V getValue() {
+            return value;
+        }
 
-		/**
-		 * Hash code based on listener
-		 *
-		 * @see java.lang.Object#hashCode()
-		 */
-		@Override
-		public int hashCode() {
-			return listener.hashCode();
-		}
+        /**
+         * {@inheritDoc}
+         */
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
 
-		/**
-		 * Equals based on listener (NOT based on scope) - can't have same
-		 * listener with two different scopes
-		 *
-		 * @see java.lang.Object#equals(java.lang.Object)
-		 */
-		@Override
-		public boolean equals(Object obj) {
-			if (this == obj) {
-				return true;
-			}
-			if (obj == null) {
-				return false;
-			}
-			if (getClass() != obj.getClass()) {
-				return false;
-			}
-			ScopedListener<?, ?> other = (ScopedListener<?, ?>) obj;
-			if (listener == null) {
-				if (other.listener != null) {
-					return false;
-				}
-			} else if (!listener.equals(other.listener)) {
-				return false;
-			}
-			return true;
-		}
+            RIEntry<?, ?> e2 = (RIEntry<?, ?>) o;
 
-		@Override
-		public String toString() {
-			return listener.toString();
-		}
-	}
+            return this.getKey().equals(e2.getKey()) &&
+                    this.getValue().equals(e2.getValue());
+        }
 
-	/**
-	 * {@inheritDoc}
-	 *
-	 * @author Yannis Cosmadopoulos
-	 */
-	private static class RIEntry<K, V> implements Entry<K, V> {
-		private final K key;
-		private final V value;
+        /**
+         * {@inheritDoc}
+         */
+        @Override
+        public int hashCode() {
+            return getKey().hashCode() ^ getValue().hashCode();
+        }
+    }
 
-		public RIEntry(K key, V value) {
-			if (key == null) {
-				throw new NullPointerException("key");
-			}
-			this.key = key;
-			this.value = value;
-		}
+    /**
+     * {@inheritDoc}
+     * TODO: not obvious how iterator should behave with locking.
+     * TODO: in the impl below, by the time we get the lock, value may be stale
+     *
+     * @author Yannis Cosmadopoulos
+     */
+    private static final class RIEntryIterator<K, V> implements Iterator<Entry<K, V>> {
+        private final Iterator<Map.Entry<K, V>> mapIterator;
+        private final LockManager<K> lockManager;
 
-		@Override
-		public K getKey() {
-			return key;
-		}
+        private RIEntryIterator(Iterator<Map.Entry<K, V>> mapIterator, LockManager<K> lockManager) {
+            this.mapIterator = mapIterator;
+            this.lockManager = lockManager;
+        }
+        /**
+         * {@inheritDoc}
+         */
+        @Override
+        public boolean hasNext() {
+            return mapIterator.hasNext();
+        }
 
-		@Override
-		public V getValue() {
-			return value;
-		}
+        /**
+         * {@inheritDoc}
+         */
+        @Override
+        public Entry<K, V> next() {
+            Map.Entry<K, V> mapEntry = mapIterator.next();
+            K key = mapEntry.getKey();
+            lockManager.lock(key);
+            try {
+                return new RIEntry<K, V>(key, mapEntry.getValue());
+            } finally {
+                lockManager.unLock(key);
+            }
+        }
 
-		/**
-		 * {@inheritDoc}
-		 */
-		@Override
-		public boolean equals(Object o) {
-			if (this == o)
-				return true;
-			if (o == null || getClass() != o.getClass())
-				return false;
+        /**
+         * {@inheritDoc}
+         */
+        @Override
+        public void remove() {
+            mapIterator.remove();
+        }
+    }
 
-			RIEntry<?, ?> e2 = (RIEntry<?, ?>) o;
+    /**
+     * Callable used for cache loader.
+     *
+     * @param <K> the type of the key
+     * @param <V> the type of the value
+     * @author Yannis Cosmadopoulos
+     */
+    private static class SpyCacheLoaderLoadCallable<K, V> implements Callable<V> {
+        private final SpyCache<K, V> cache;
+        private final CacheLoader<K, ? extends V> cacheLoader;
+        private final K key;
 
-			return this.getKey().equals(e2.getKey())
-					&& this.getValue().equals(e2.getValue());
-		}
+        SpyCacheLoaderLoadCallable(SpyCache<K, V> cache, CacheLoader<K, ? extends V> cacheLoader, K key) {
+            this.cache = cache;
+            this.cacheLoader = cacheLoader;
+            this.key = key;
+        }
 
-		/**
-		 * {@inheritDoc}
-		 */
-		@Override
-		public int hashCode() {
-			return getKey().hashCode() ^ getValue().hashCode();
-		}
-	}
+        @Override
+        public V call() throws Exception {
+            Entry<K, ? extends V> entry = cacheLoader.load(key);
+            cache.put(entry.getKey(), entry.getValue());
+            return entry.getValue();
+        }
+    }
 
-	/**
-	 * {@inheritDoc}
-	 *
-	 * @author Yannis Cosmadopoulos
-	 */
-	private static final class RIEntryIterator<K, V> implements
-			Iterator<Entry<K, V>> {
-		private final Iterator<Map.Entry<K, V>> mapIterator;
+    /**
+     * Callable used for cache loader.
+     *
+     * @param <K> the type of the key
+     * @param <V> the type of the value
+     * @author Yannis Cosmadopoulos
+     */
+    private static class SpyCacheLoaderLoadAllCallable<K, V> implements Callable<Map<K, ? extends V>> {
+        private final SpyCache<K, V> cache;
+        private final CacheLoader<K, ? extends V> cacheLoader;
+        private final Collection<? extends K> keys;
 
-		private RIEntryIterator(Iterator<Map.Entry<K, V>> mapIterator) {
-			this.mapIterator = mapIterator;
-		}
+        SpyCacheLoaderLoadAllCallable(SpyCache<K, V> cache, CacheLoader<K, ? extends V> cacheLoader, Collection<? extends K> keys) {
+            this.cache = cache;
+            this.cacheLoader = cacheLoader;
+            this.keys = keys;
+        }
 
-		/**
-		 * {@inheritDoc}
-		 */
-		@Override
-		public boolean hasNext() {
-			return mapIterator.hasNext();
-		}
+        @Override
+        public Map<K, ? extends V> call() throws Exception {
+            ArrayList<K> keysNotInStore = new ArrayList<K>();
+            for (K key : keys) {
+                if (!cache.containsKey(key)) {
+                    keysNotInStore.add(key);
+                }
+            }
+            Map<K, ? extends V> value = cacheLoader.loadAll(keysNotInStore);
+            cache.putAll(value);
+            return value;
+        }
+    }
 
-		/**
-		 * {@inheritDoc}
-		 */
-		@Override
-		public Entry<K, V> next() {
-			Map.Entry<K, V> mapEntry = mapIterator.next();
-			return new RIEntry<K, V>(mapEntry.getKey(), mapEntry.getValue());
-		}
+    /**
+     * A Builder for RICache.
+     *
+     * @param <K>
+     * @param <V>
+     * @author Yannis Cosmadopoulos
+     */
+    public static class Builder<K, V> extends AbstractCache.Builder<K, V> {
+        private final Set<CacheEntryListener<K, V>> listeners = new CopyOnWriteArraySet<CacheEntryListener<K, V>>();
+        private final String servers;
+        
+        /**
+         * Construct a builder.
+         *
+         * @param cacheName        the name of the cache to be built
+         * @param cacheManagerName the name of the cache manager
+         * @param classLoader the class loader
+         */
+        public Builder(String cacheName, String cacheManagerName, ClassLoader classLoader,String servers) {
+            this(cacheName, cacheManagerName, classLoader, new SpyCacheConfiguration.Builder(),servers);
+        }
 
-		/**
-		 * {@inheritDoc}
-		 */
-		@Override
-		public void remove() {
-			mapIterator.remove();
-		}
-	}
+        private Builder(String cacheName, String cacheManagerName, ClassLoader classLoader,
+        		SpyCacheConfiguration.Builder configurationBuilder,String servers) {
+            super(cacheName, cacheManagerName, classLoader, configurationBuilder);
+            this.servers = servers;
+        }
 
-	/**
-	 * Callable used for cache loader.
-	 *
-	 * @param <K>
-	 *            the type of the key
-	 * @param <V>
-	 *            the type of the value
-	 * @author Yannis Cosmadopoulos
-	 */
-	private static class RICacheLoaderLoadCallable<K, V> implements Callable<V> {
-		private final SpyCache<K, V> cache;
-		private final CacheLoader<K, V> cacheLoader;
-		private final K key;
+        /**
+         * Builds the cache
+         *
+         * @return a constructed cache.
+         */
+        @Override
+        public SpyCache<K, V> build() {
+            CacheConfiguration<K, V> configuration = createCacheConfiguration();
+            SpyCache<K, V> riCache = new SpyCache<K, V>(cacheName, cacheManagerName,
+                classLoader, configuration,
+                cacheLoader, cacheWriter, listeners,servers);
+            ((SpyCacheConfiguration) configuration).setRiCache(riCache);
+            return riCache;
+        }
 
-		RICacheLoaderLoadCallable(SpyCache<K, V> cache,
-				CacheLoader<K, V> cacheLoader, K key) {
-			this.cache = cache;
-			this.cacheLoader = cacheLoader;
-			this.key = key;
-		}
+        @Override
+        public Builder<K, V> registerCacheEntryListener(CacheEntryListener<K, V> listener) {
+            listeners.add(listener);
+            return this;
+        }
+    }
 
-		@Override
-		public V call() throws Exception {
-			Entry<K, V> entry = cacheLoader.load(key);
-			cache.put(entry.getKey(), entry.getValue());
-			return entry.getValue();
-		}
-	}
+    /**
+     * Simple lock management
+     * @param <K> the type of the object to be locked
+     * @author Yannis Cosmadopoulos
+     * @since 1.0
+     */
+    private static final class LockManager<K> {
+        private final ConcurrentHashMap<K, ReentrantLock> locks = new ConcurrentHashMap<K, ReentrantLock>();
+        private final LockFactory lockFactory = new LockFactory();
 
-	/**
-	 * Callable used for cache loader.
-	 *
-	 * @param <K>
-	 *            the type of the key
-	 * @param <V>
-	 *            the type of the value
-	 * @author Yannis Cosmadopoulos
-	 */
-	private static class RICacheLoaderLoadAllCallable<K, V> implements
-			Callable<Map<K, V>> {
-		private final SpyCache<K, V> cache;
-		private final CacheLoader<K, V> cacheLoader;
-		private final Collection<? extends K> keys;
+        private LockManager() {
+        }
 
-		RICacheLoaderLoadAllCallable(SpyCache<K, V> cache,
-				CacheLoader<K, V> cacheLoader, Collection<? extends K> keys) {
-			this.cache = cache;
-			this.cacheLoader = cacheLoader;
-			this.keys = keys;
-		}
+        /**
+         * Lock the object
+         * @param key the key
+         */
+        private void lock(K key) {
+            ReentrantLock lock = lockFactory.getLock();
 
-		@Override
-		public Map<K, V> call() throws Exception {
-			ArrayList<K> keysNotInStore = new ArrayList<K>();
-			for (K key : keys) {
-				if (!cache.containsKey(key)) {
-					keysNotInStore.add(key);
-				}
-			}
-			Map<K, V> value = cacheLoader.loadAll(keysNotInStore);
-			cache.putAll(value);
-			return value;
-		}
-	}
+            while (true) {
+                ReentrantLock oldLock = locks.putIfAbsent(key, lock);
+                if (oldLock == null) {
+                    return;
+                }
+                // there was a lock
+                oldLock.lock();
+                // now we have it. Because of possibility that someone had it for remove,
+                // we don't re-use directly
+                lockFactory.release(oldLock);
+            }
+        }
 
-	/**
-	 * A Builder for RICache.
-	 *
-	 * @param <K>
-	 * @param <V>
-	 * @author Yannis Cosmadopoulos
-	 */
-	public static class Builder<K, V> implements CacheBuilder<K, V> {
-		private final String servers;
-		private final String cacheName;
-		private final ClassLoader classLoader;
-		private final String cacheManagerName;
-		private final Set<Class<?>> immutableClasses;
-		private final SpyCacheConfiguration.Builder configurationBuilder = new SpyCacheConfiguration.Builder();
-		private CacheLoader<K, V> cacheLoader;
-		private CacheWriter<K, V> cacheWriter;
-		private final CopyOnWriteArraySet<ListenerRegistration<K, V>> listeners = new CopyOnWriteArraySet<ListenerRegistration<K, V>>();
+        /**
+         * Unlock the object
+         * @param key the object
+         */
+        private void unLock(K key) {
+            ReentrantLock lock = locks.remove(key);
+            lockFactory.release(lock);
+        }
 
-		/**
-		 * Construct a builder.
-		 *
-		 * @param cacheName
-		 *            the name of the cache to be built
-		 * @param cacheManagerName
-		 *            the name of the cache manager
-		 * @param immutableClasses
-		 *            the immutable classes
-		 * @param classLoader
-		 *            the class loader
-		 */
-		public Builder(String cacheName, String cacheManagerName,
-				Set<Class<?>> immutableClasses, ClassLoader classLoader,
-				String servers) {
-			if (cacheName == null) {
-				throw new NullPointerException("cacheName");
-			}
-			this.servers = servers;
-			this.cacheName = cacheName;
-			if (classLoader == null) {
-				throw new NullPointerException("cacheLoader");
-			}
-			this.classLoader = classLoader;
-			if (cacheManagerName == null) {
-				throw new NullPointerException("cacheManagerName");
-			}
-			this.cacheManagerName = cacheManagerName;
-			if (immutableClasses == null) {
-				throw new NullPointerException("immutableClasses");
-			}
-			this.immutableClasses = immutableClasses;
-		}
+        /**
+         * Factory/pool
+         * @author Yannis Cosmadopoulos
+         * @since 1.0
+         */
+        private static final class LockFactory {
+            private static final int CAPACITY = 100;
+            private static final ArrayList<ReentrantLock> LOCKS = new ArrayList<ReentrantLock>(CAPACITY);
 
-		/**
-		 * Builds the cache
-		 *
-		 * @return a constructed cache.
-		 */
-		@Override
-		public SpyCache<K, V> build() {
-			SpyCacheConfiguration configuration = configurationBuilder.build();
-			if (configuration.isReadThrough() && (cacheLoader == null)) {
-				throw new InvalidConfigurationException("cacheLoader");
-			}
-			if (configuration.isWriteThrough() && (cacheWriter == null)) {
-				throw new InvalidConfigurationException("cacheWriter");
-			}
-			SpyCache<K, V> riCache = new SpyCache<K, V>(cacheName,
-					cacheManagerName, immutableClasses, classLoader,
-					configuration, cacheLoader, cacheWriter, listeners, servers);
-			configuration.setRiCache(riCache);
-			return riCache;
-		}
+            private LockFactory() {
+            }
 
-		/**
-		 * Set the cache loader.
-		 *
-		 * @param cacheLoader
-		 *            the CacheLoader
-		 * @return the builder
-		 */
-		@Override
-		public Builder<K, V> setCacheLoader(CacheLoader<K, V> cacheLoader) {
-			if (cacheLoader == null) {
-				throw new NullPointerException("cacheLoader");
-			}
-			this.cacheLoader = cacheLoader;
-			return this;
-		}
+            private ReentrantLock getLock() {
+                ReentrantLock qLock = null;
+                synchronized (LOCKS) {
+                    if (!LOCKS.isEmpty()) {
+                        qLock = LOCKS.remove(0);
+                    }
+                }
 
-		@Override
-		public CacheBuilder<K, V> setCacheWriter(CacheWriter<K, V> cacheWriter) {
-			if (cacheWriter == null) {
-				throw new NullPointerException("cacheWriter");
-			}
-			this.cacheWriter = cacheWriter;
-			return this;
-		}
+                ReentrantLock lock = qLock != null ? qLock : new ReentrantLock();
+                lock.lock();
+                return lock;
+            }
 
-		@Override
-		public CacheBuilder<K, V> registerCacheEntryListener(
-				CacheEntryListener<K, V> listener, NotificationScope scope,
-				boolean synchronous) {
-			listeners.add(new ListenerRegistration<K, V>(listener, scope,
-					synchronous));
-			return this;
-		}
+            private void release(ReentrantLock lock) {
+                lock.unlock();
+                synchronized (LOCKS) {
+                    if (LOCKS.size() <= CAPACITY) {
+                        LOCKS.add(lock);
+                    }
+                }
+            }
+        }
+    }
 
-		@Override
-		public CacheBuilder<K, V> setStoreByValue(boolean storeByValue) {
-			configurationBuilder.setStoreByValue(storeByValue);
-			return this;
-		}
+    /**
+     * A mutable entry
+     * @param <K>
+     * @param <V>
+     * @author Yannis Cosmadopoulos
+     * @since 1.0
+     */
+    private static class SpyMutableEntry<K, V> implements MutableEntry<K, V> {
+        private final K key;
+        private V value;
+        private final SpySimpleCache<K, V> store;
+        private boolean exists;
+        private boolean remove;
 
-		@Override
-		public CacheBuilder<K, V> setTransactionEnabled(
-				IsolationLevel isolationLevel, Mode mode) {
-			configurationBuilder.setTransactionEnabled(isolationLevel, mode);
-			return this;
-		}
+        SpyMutableEntry(K key, SpySimpleCache<K, V> store) {
+            this.key = key;
+            this.store = store;
+            exists = store.containsKey(key);
+        }
 
-		@Override
-		public CacheBuilder<K, V> setStatisticsEnabled(boolean enableStatistics) {
-			configurationBuilder.setStatisticsEnabled(enableStatistics);
-			return this;
-		}
+        private void commit() {
+            if (remove) {
+                store.remove(key);
+            } else if (value != null) {
+                store.put(key, value);
+            }
+        }
 
-		@Override
-		public CacheBuilder<K, V> setReadThrough(boolean readThrough) {
-			configurationBuilder.setReadThrough(readThrough);
-			return this;
-		}
+        @Override
+        public boolean exists() {
+            return exists;
+        }
 
-		@Override
-		public CacheBuilder<K, V> setWriteThrough(boolean writeThrough) {
-			configurationBuilder.setWriteThrough(writeThrough);
-			return this;
-		}
+        @Override
+        public void remove() {
+            remove = true;
+            exists = false;
+            value = null;
+        }
 
-		@Override
-		public CacheBuilder<K, V> setExpiry(CacheConfiguration.ExpiryType type,
-				CacheConfiguration.Duration duration) {
-			if (type == null) {
-				throw new NullPointerException();
-			}
-			if (duration == null) {
-				throw new NullPointerException();
-			}
-			configurationBuilder.setExpiry(type, duration);
-			return this;
-		}
-	}
+        @Override
+        public void setValue(V value) {
+            if (value == null) {
+                throw new NullPointerException();
+            }
+            exists = true;
+            remove = false;
+            this.value = value;
+        }
 
-	/**
-	 * A struct :)
-	 *
-	 * @param <K>
-	 * @param <V>
-	 */
-	private static final class ListenerRegistration<K, V> {
-		private final CacheEntryListener<K, V> cacheEntryListener;
-		private final NotificationScope scope;
-		private final boolean synchronous;
+        @Override
+        public K getKey() {
+            return key;
+        }
 
-		private ListenerRegistration(
-				CacheEntryListener<K, V> cacheEntryListener,
-				NotificationScope scope, boolean synchronous) {
-			this.cacheEntryListener = cacheEntryListener;
-			this.scope = scope;
-			this.synchronous = synchronous;
-		}
-	}
-
-	private V getInternal(K key) {
-		// noinspection SuspiciousMethodCalls
-		long start = statisticsEnabled() ? System.nanoTime() : 0;
-
-		V value = store.get(key);
-		if (statisticsEnabled()) {
-			statistics.addGetTimeNano(System.nanoTime() - start);
-		}
-		if (value == null) {
-			if (statisticsEnabled()) {
-				statistics.increaseCacheMisses(1);
-			}
-			if (cacheLoader != null) {
-				return getFromLoader(key);
-			} else {
-				return null;
-			}
-		} else {
-			if (statisticsEnabled()) {
-				statistics.increaseCacheHits(1);
-			}
-			return value;
-		}
-	}
-
-	private V getFromLoader(K key) {
-		Cache.Entry<K, V> entry = cacheLoader.load(key);
-		if (entry != null) {
-			store.put(entry.getKey(), entry.getValue());
-			return entry.getValue();
-		} else {
-			return null;
-		}
-	}
-
-	/**
-	 * Returns the size of the cache.
-	 *
-	 * @return the size in entries of the cache
-	 */
-	long getSize() {
-		return store.size();
-	}
-
-
-
-
+        @Override
+        public V getValue() {
+            return value != null ? value : store.get(key);
+        }
+    }
 }

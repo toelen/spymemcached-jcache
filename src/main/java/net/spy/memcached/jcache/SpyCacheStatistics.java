@@ -52,26 +52,9 @@ public class SpyCacheStatistics implements CacheStatistics, Serializable {
      * Constructs a cache statistics object
      *
      * @param cache the associated cache
-     * @param cacheManagerName the name of the cache manager
      */
-    public SpyCacheStatistics(Cache<?, ?> cache, String cacheManagerName) {
+    public SpyCacheStatistics(Cache<?, ?> cache) {
         this.cache = cache;
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public String getName() {
-        return cache.getName();
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public Status getStatus() {
-        return cache.getStatus();
     }
 
     /**
@@ -100,7 +83,7 @@ public class SpyCacheStatistics implements CacheStatistics, Serializable {
      * @return the date statistics started being accumulated
      */
     @Override
-    public Date statsAccumulatingFrom() {
+    public Date getStartAccumulationDate() {
         return lastCollectionStartDate;
     }
 
@@ -199,7 +182,7 @@ public class SpyCacheStatistics implements CacheStatistics, Serializable {
      */
     @Override
     public float getAverageGetMillis() {
-        return (cacheGetTimeTakenNanos.floatValue() / getCacheGets()) / NANOSECONDS_IN_A_MILLISECOND;
+        return (cacheGetTimeTakenNanos.longValue() / getCacheGets()) / NANOSECONDS_IN_A_MILLISECOND;
     }
 
     /**
@@ -209,7 +192,7 @@ public class SpyCacheStatistics implements CacheStatistics, Serializable {
      */
     @Override
     public float getAveragePutMillis() {
-        return (cachePutTimeTakenNanos.floatValue() / getCacheGets()) / NANOSECONDS_IN_A_MILLISECOND;
+        return (cachePutTimeTakenNanos.longValue() / getCacheGets()) / NANOSECONDS_IN_A_MILLISECOND;
     }
 
     /**
@@ -219,7 +202,7 @@ public class SpyCacheStatistics implements CacheStatistics, Serializable {
      */
     @Override
     public float getAverageRemoveMillis() {
-        return (cacheRemoveTimeTakenNanos.floatValue() / getCacheGets()) / NANOSECONDS_IN_A_MILLISECOND;
+        return (cacheRemoveTimeTakenNanos.longValue() / getCacheGets()) / NANOSECONDS_IN_A_MILLISECOND;
     }
 
     //package local incrementers
